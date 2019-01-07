@@ -14,3 +14,5 @@ FILE_UPLOAD_STATUS_ENDPOINT = 'https://api.gfycat.com/v1/gfycats/fetch/status/'
 GFY_URL = 'https://gfycat.com/'
 # User Check URL
 USER_CHECK_ENDPOINT = 'https://api.gfycat.com/v1/users/'
+# USER enpoint
+USER_ENDPOINT = 'GET https://api.gfycat.com/v1/me/'
