@@ -1,11 +1,9 @@
-from gfypy.constants import (TOKEN_ENDPOINT, REQUEST_ENDPOINT, FILE_UPLOAD_ENDPOINT,
-                FILE_UPLOAD_STATUS_ENDPOINT, GFY_URL, USER_CHECK_ENDPOINT)
-from gfypy.errors import GfyPyClientError
-
-import requests as req
-import time, json
+from gfypy.constants import GFY_URL
+from gfypy.errors import GfyPyClientError, GfyCatAuthError
+import gfypy.utils as util
 
 import logging
+from gfypy.utils import fetch_gfy
 
 class GfyCatClient(object):
     def __init__(self, client_id, client_secret, username, password):
@@ -15,14 +13,16 @@ class GfyCatClient(object):
         self._client_secret = client_secret
         self._username = username
         self._password = password
-        self._auth_header_request_body= {
+        self._auth_header_request_body = {
             "grant_type": "password",
             "client_id": self._client_id,
             "client_secret": self._client_secret,
             "username": self._username,
             "password": self._password
         }
-
+    def get_ah(self):
+        return util.get_auth_headers(self._auth_header_request_body)
+        
     # This file is going to follow a noticable pattern
     # There is a forward facing method that calls on a similarly named utility
     #       method. API interaction mainly occurs in the back methods. The forward
@@ -30,7 +30,7 @@ class GfyCatClient(object):
 
     def check_user_avaliability(self, username):
         '''
-        Check if a username is avaliable
+        Check if a username is available
 
         Paramaters
         ----------
@@ -40,22 +40,22 @@ class GfyCatClient(object):
         Returns
         -------
         bool
-            True if its avaliable, false if its not or isn't a valid username
+            True if its available, false if its not or isn't a valid username
 
         Raises
         ------
         GfyCatAuthError
-            If the credientials go bad or aren't there in the first place
+            If the credentials go bad or aren't there in the first place
         GfyPyClientError
-            If a bad response from the server is recieved
+            If a bad response from the server is received
         '''
 
         # 404 Not Found	The username was not found which means that it is available.
         # 422 Unprocessable Entity	The username was invalid.
         # 2** No Content	The username was found which means that the username is unavailable.
         # 401 Unauthorized	You need to provide a valid token to perform this action
-        auth_header = _get_auth_headers(self._auth_header_request_body)
-        code = _check_user_avaliability(username, auth_header)
+        auth_header = util.get_auth_headers(self._auth_header_request_body)
+        code = util.check_user_avaliability(username, auth_header)
         if code == 404:
             return True
         elif code == 422:
@@ -64,15 +64,34 @@ class GfyCatClient(object):
             return False
         elif code == 401:
             # This should never happen, we catch it grabbing headers
-            raise GfyCatAuthError('Bad credeitials or none provided')
+            raise GfyCatAuthError('Bad credentials or none provided')
         else:
             # GfyCat *says* this shouldn't happen but GfyCat API docs aren't that
             #       great
-            raise GfyPyClientError('Bad response recieved', code)
+            raise GfyPyClientError('Bad response received', code)
 
     def check_email_verified(self):
-        adr = USER_ENDPOINT + "email_verified"
-
+        # 404 Not Found    The email attached to the token bearer’s username is not verified.
+        # 2** No Content    The email attached to the token bearer’s username is verified.
+        # 401 Unauthorized    You need to provide a valid token to perform this action
+        auth_header = self.get_ah()
+        code = util.check_email_verified(auth_header)
+        if 200 <= code <= 299:
+            return True 
+        elif code == 404:
+            return False 
+        elif code == 401:
+            raise GfyCatAuthError('Bad Credentials or none provided')
+        else:
+            raise GfyPyClientError('Bad response received', code)
+        
+    def send_verification_email(self, check_verified=True):
+        email_verified = True if (200 <= util.check_email_verified(util.get_auth_headers(self._auth_header_request_body)) <= 299) else False 
+        if check_verified and not email_verified:
+            logging.info("Email already verified. Set check_verified = False to force it anyways (why?)")
+            return
+        util.send_verification_email(self._auth_header_request_body)
+        
 
     def upload_file(self, file_name, title="Title", desc="Description", noMd5 = True, private = True):
         '''
@@ -93,8 +112,8 @@ class GfyCatClient(object):
 
         Returns
         ----------
-        str
-            String containing a link to the uploaded file
+        GfyCat
+            Object containing as much data as gfycat will give us on the uploaded image
 
         '''
 
@@ -105,160 +124,77 @@ class GfyCatClient(object):
             "noMd5": noMd5
             }
 
-        auth_headers = _auth_headers(self._auth_header_request_body)
-        gfy_id = _get_url(auth_headers, gif_param)
-        _upload_file(gfy_id, file_name)
-        return gfyUrl.format(gfy_id)
+        auth_headers = util.get_auth_headers(self._auth_header_request_body)
+        gfy_id = util.get_url(auth_headers, gif_param)
+        util.upload_file(gfy_id, file_name)
+        return GfyCat(gfy_id)
 
-
-
-    # --
-    # Everything below this comment is a utility method
-    #   Not forward facing functions, should only be used by this class itself
-    #   to perform the forward facing functions
-    # --
-    def _check_user_avaliability(self, username, headers):
-        '''
-        Check if a username is avaliable based on response codes from
-                The api
-
-        Parameters
-        -----------
-        username : String
-            String containing the username
-        headers : dict
-            our authentication headers we need for everything
-        '''
-        r = req.head(USER_CHECK_ENDPOINT + username, headers=headers)
-        return req.status_code
-    def _check_email_verified(self, headers):
-        '''
-        Check if the email is verified.
-
-        Parameters
-        ----------
-        headers
-        '''
-    def _get_auth_headers(self, auth_header_request_body):
-        '''
-        Grab an authentication header for us to use
-
-        Parameters
-        ----------
-        auth_header_request_body : dict
-            Dictionary containing the client id/secret and user/pass
-
-        Returns
-        ----------
-        auth_header : dict
-            Dictionary containing the auth header
-        '''
-        body = auth_header_request_body
-        logging.debug(body)
-        # Get a token
-        r = req.post(TOKEN_ENDPOINT, json=body)
-
-
-        if r.status_code != 200:
-            if r.status_code == 401:
-                raise GfyCatAuthError('Incorrect Credentials')
-            else:
-                raise GfyPyClientError('Error requesting authentication headers', req.status_code)
-
-        response = r.json()
-        if 'error' in response:
-            raise GfyPyClientError(response['error'])
-
-
-        access_token = r.json().get("access_token")
-
-        logging.debug("access_token: " + access_token)
-
-        auth_header = {
-            "Authorization": "Bearer {}".format(access_token)
-        }
-
-        return auth_header
-
-
-    def _get_url(self, headers, gif_param):
-        '''
-        Request a GfyCat URL for us to use
-
-        Parameters
-        ----------
-        headers : dict
-            Auth headers we requested earlier
-        gif_param : dict
-            Specific settings for the upload
-
-        Return
-        ----------
-        gfy_id : str
-            The ID we will interact with for the gif we are uploading
-        '''
-        # Ask GfyCat for an URL
-        gfy_return = req.post(REQUEST_ENDPOINT, json=gif_param, headers=headers)
-
-        if req.status_code != 200:
-            raise GfyPyClientError('Error fetching the URL', req.status_code)
-
-        response = req.json()
-        if 'error' in response:
-            raise GfyPyClientError(response['error'])
-
-        # Get the name out of the data it sends
-        gfy_id = gfy_return.json().get("gfyname")
-
-
-
-        logging.debug("gfyID: " + gfy_id)
-
-        return gfy_id
-    def _upload_file(self, gfy_id, video_name):
-        '''
-        Actual uploading of the file goes on here
-
-        Paramaters
-        ----------
-        gfy_id : str
-            gfycat id we grabbed earlier
-        video_name : str
-            path to the video we're uploading
-        '''
-        logging.debug("Attempting to Upload to GfyCat")
-        # We will use this to check whether the video is uploading or not
-        upload_status = "encoding"
-
-        # Put the entire file in a dict because logic
-        with open(video_name, 'rb') as payload:
-            files = {
-                'file': (video_name, payload),
-                'key': gfy_id,
-            }
-            # Upload dict
-            res = req.post(FILE_UPLOAD_ENDPOINT, files=files)
-            if res.status_code != 200:
-                raise GfyPyClientError('Error fetching the URL', res.status_code)
-
-        response = res.json()
-        if 'error' in response:
-            raise GfyPyClientError(response['error'])
-        logging.debug(res.text)
-        # Hang the program till the upload finishes
-        while upload_status != "complete":
-            check_return = req.get(FILE_UPLOAD_STATUS_ENDPOINT + gfy_id)
-            upload_status = check_return.json().get("task")
-
-            logging.debug("Status: " + upload_status)
-            time.sleep(5)
 class GfyCat(object):
     '''
     Represents a GfyCat (uploaded gif) and provides variables to view it.
     '''
     def __init__(self, gfy_id):
-        '''
-        Store the gfy_id. We will get all of the info and parse it into a nice
-                object for easy interface interaction
-
-        '''
+        # {"gfyItem": {"gfyId":"{gfyid}","gfyName":"{gfyname}","gfyNumber":"{gfynumber}","webmUrl":"", 
+        # "gifUrl":"","mobileUrl":"","mobilePosterUrl":"","miniUrl":"","miniPosterUrl":"",
+        # "posterUrl":"","thumb100PosterUrl":"", "max5mbGif":"","max2mbGif":"","max1mbGif":"",
+        # "gif100px":"","width":0, "height":0,"avgColor":"#000000","frameRate":1,"numFrames":1,"mp4Size":1,
+        # "webmSize":1, "gifSize":1,"source":1,"createDate":1,"nsfw":"0","mp4Url":"","likes":"0","published":1,
+        #  "dislikes":"0","extraLemmas":"","md5":"0","views":0,"tags":[""],"userName":"anonymous", "title":"","description":"",
+        # "languageText":"","languageCategories":null,"subreddit":"", "redditId":"","redditIdText":"","domainWhitelist":[]}}
+        self.gfy_id = gfy_id
+        self.valid = True
+        
+        response = fetch_gfy(gfy_id)
+        if response.status_code == 404:
+            self.valid = False
+        elif response.status_code == 200:
+            self._info = response.json()
+            self._gfyitem = self._info.get("gfyItem")
+            
+            
+            self.gfyId = self._gfyitem.get("gfyId")
+            self.gfyName = self._gfyitem.get("gfyName")
+            self.gfyNumber = self._gfyitem.get("gfyNumber")
+            self.webmUrl = self._gfyitem.get("webmUrl")
+            self.gifUrl = self._gfyitem.get("gifUrl")
+            self.mobileUrl = self._gfyitem.get("mobileUrl")
+            self.mobilePosterUrl = self._gfyitem.get("mobilePosterUrl")
+            self.miniUrl = self._gfyitem.get("miniUrl")
+            self.miniPosterUrl = self._gfyitem.get("miniPosterUrl")
+            self.posterUrl = self._gfyitem.get("posterUrl")
+            self.thumb100PosterUrl = self._gfyitem.get("thumb100PosterUrl")
+            self.max5mbGif = self._gfyitem.get("max5mbGif")
+            self.max2mbGif = self._gfyitem.get("max2mbGif")
+            self.max1mbGif = self._gfyitem.get("max1mbGif")
+            self.gif100px = self._gfyitem.get("gif100px")
+            self.width = self._gfyitem.get('width')
+            self.height = self._gfyitem.get('height')
+            self.avgColor = self._gfyitem.get('avgColor')
+            self.frameRate = self._gfyitem.get('frameRate')
+            self.numFrames = self._gfyitem.get('numFrames')
+            self.mp4Size = self._gfyitem.get('mp4Size')
+            self.webmSize = self._gfyitem.get('webmSize')
+            self.gifSize = self._gfyitem.get('gifSize')
+            self.source = self._gfyitem.get('source')
+            self.createDate = self._gfyitem.get('createDate')
+            self.nsfw = False if (self._gfyitem.get('nsfw') == "0") else True
+            self.mp4Url = self._gfyitem.get('mp4Url')
+            self.likes = self._gfyitem.get('likes')
+            self.published = self._gfyitem.get('published')
+            self.dislikes = self._gfyitem.get('dislikes')
+            # I have no idea what this is 
+            self.extraLemmas = self._gfyitem.get('extraLemmas')
+            self.md5 = self._gfyitem.get('md5')
+            self.views = self._gfyitem.get('views')
+            self.tags = self._gfyitem.get('tags')
+            self.userName = self._gfyitem.get('userName')
+            self.title = self._gfyitem.get('title')
+            self.description = self._gfyitem.get('description')
+            self.languageText = self._gfyitem.get('languageText')
+            self.languageCategories = self._gfyitem.get('languageCategories')
+            self.subreddit = self._gfyitem.get('subreddit')
+            self.redditId = self._gfyitem.get('redditId')
+            self.redditIdText = self._gfyitem.get('redditIdText')
+            self.domainWhitelist = self._gfyitem.get('domainWhitelist')
+    def __str__(self):   
+        return self.gfy_id     
