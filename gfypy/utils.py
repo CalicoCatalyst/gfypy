@@ -150,17 +150,17 @@ def upload_file(gfy_id, video_name):
     # Put the entire file in a dict because logic
     with open(video_name, 'rb') as payload:
         files = {
-            'file': (video_name, payload),
             'key': gfy_id,
+            'file': (video_name, payload),
         }
         # Upload dict
         res = req.post(FILE_UPLOAD_ENDPOINT, files=files)
-        if res.status_code != 200:
+        if not 200 <= res.status_code <= 299 :
             raise GfyPyClientError('Error fetching the URL', res.status_code)
 
-    response = res.json()
-    if 'error' in response:
-        raise GfyPyClientError(response['error'])
+    # response = res.json()
+    # if 'error' in response:
+    #     raise GfyPyClientError(response['error'])
     logging.debug(res.text)
     # Hang the program till the upload finishes
     while upload_status != "complete":

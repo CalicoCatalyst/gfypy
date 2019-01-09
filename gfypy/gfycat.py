@@ -151,8 +151,9 @@ class GfyCat(object):
             self._info = response.json()
             self._gfyitem = self._info.get("gfyItem")
             
-            
             self.gfyId = self._gfyitem.get("gfyId")
+        
+            self.url = GFY_URL + self.gfy_id
             self.gfyName = self._gfyitem.get("gfyName")
             self.gfyNumber = self._gfyitem.get("gfyNumber")
             self.webmUrl = self._gfyitem.get("webmUrl")
